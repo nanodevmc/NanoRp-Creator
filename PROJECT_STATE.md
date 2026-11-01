@@ -3,6 +3,7 @@
 ## 1. О проекте
 - **Название**: NanoRp-Creator (v1.0.0)
 - **Автор**: NanoDev. Обратная связь: t.me/radoqi, Канал: t.me/WineSquad
+- **Репозиторий**: https://github.com/nanodevmc/NanoRp-Creator (Upstream: https://github.com/NanoDev1488/NanoRp-Creator)
 - **Назначение**: Ультралегкая кроссплатформенная студия ресурс-паков Minecraft с умным выравниванием четности пикселей (кратность 2), заменой глифов шрифта, CustomModelData и облачным линкером без API-ключей.
 
 ## 2. Стек и Архитектура
