@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('api', {
     createZip: (sourceDir, outputZip) => ipcRenderer.invoke('pack:create-zip', { sourceDir, outputZip }),
     uploadCloud: (filePath, provider) => ipcRenderer.invoke('pack:upload-cloud', { filePath, provider }),
     openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+    exportToMinecraft: (sourceDir, packName) => ipcRenderer.invoke('pack:export-to-minecraft', { sourceDir, packName }),
+    getMinecraftDir: () => ipcRenderer.invoke('pack:get-minecraft-dir'),
+    saveImageBuffer: (filePath, base64Data) => ipcRenderer.invoke('fs:save-image-buffer', { filePath, base64Data }),
+    renameFile: (oldPath, newPath) => ipcRenderer.invoke('fs:rename-file', { oldPath, newPath }),
     getStats: () => ipcRenderer.invoke('app:get-stats'),
     getPathForFile: (file) => {
         try {

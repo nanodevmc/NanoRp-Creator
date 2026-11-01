@@ -3,22 +3,23 @@ const path = require('path');
 const fs = require('fs');
 const nativeBridge = require('./native-bridge');
 
-// --- EXTREME LOW-RESOURCE ENGINE TUNING (CELERON / 4GB RAM OPTIMIZED) ---
-app.commandLine.appendSwitch('disable-gpu');
-app.commandLine.appendSwitch('disable-gpu-compositing');
-app.commandLine.appendSwitch('disable-software-rasterizer');
-app.commandLine.appendSwitch('disable-accelerated-2d-canvas');
-app.commandLine.appendSwitch('disable-accelerated-video-decode');
+// --- ULTRA-LIGHTWEIGHT ENGINE TUNING (CELERON / 4GB RAM OPTIMIZED) ---
+// Strip Chromium background services, telemetry, and unnecessary processes
 app.commandLine.appendSwitch('disable-breakpad');
 app.commandLine.appendSwitch('disable-component-update');
 app.commandLine.appendSwitch('disable-domain-reliability');
 app.commandLine.appendSwitch('disable-sync');
 app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('disable-extensions');
+app.commandLine.appendSwitch('disable-default-apps');
+app.commandLine.appendSwitch('disable-print-preview');
+app.commandLine.appendSwitch('disable-speech-api');
+app.commandLine.appendSwitch('no-pings');
 app.commandLine.appendSwitch('renderer-process-limit', '1');
 app.commandLine.appendSwitch('disable-site-isolation-trials');
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess');
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,AutofillServerCommunication,CertificateTransparencyComponentUpdater,Translate,NetworkService');
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=36 --optimize_for_size --expose-gc --lite-mode');
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,AutofillServerCommunication,CertificateTransparencyComponentUpdater,Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider');
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=32 --optimize_for_size --expose-gc');
 
 let mainWindow = null;
 
@@ -36,9 +37,10 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
             contextIsolation: true,
-            sandbox: false,
-            backgroundThrottling: false,
-            spellcheck: false
+            sandbox: true,
+            backgroundThrottling: true,
+            spellcheck: false,
+            devTools: false
         }
     });
 
@@ -46,7 +48,18 @@ function createWindow() {
 
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
-        // Trigger GC once ready to drop initial load overhead
+        try {
+            mainWindow.webContents.session.clearCache();
+        } catch {}
+        if (global.gc) {
+            try { global.gc(); } catch {}
+        }
+    });
+
+    mainWindow.on('minimize', () => {
+        try {
+            mainWindow.webContents.session.clearCache();
+        } catch {}
         if (global.gc) {
             try { global.gc(); } catch {}
         }
@@ -73,6 +86,11 @@ app.on('window-all-closed', () => {
 
 // Periodic lightweight memory trimming for 4GB RAM machines
 setInterval(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+            mainWindow.webContents.session.clearCache();
+        } catch {}
+    }
     if (global.gc) {
         try { global.gc(); } catch {}
     }
@@ -258,29 +276,49 @@ ipcMain.handle('pack:generate', async (_, packData) => {
             });
         }
 
-        // Write master overrides for each base item
+        // Write master overrides for each base item (merging with existing overrides to prevent data loss!)
         for (const [baseItem, overrides] of Object.entries(itemGroups)) {
             const masterModelPath = path.join(modelsItemDir, `${baseItem}.json`);
-            // Deduplicate overrides by CustomModelData (keep latest)
+            
+            const existingOverrides = [];
+            let masterParent = isHandheldItem(baseItem) ? 'item/handheld' : 'item/generated';
+            let masterTextures = { layer0: `minecraft:item/${baseItem}` };
+
+            if (fs.existsSync(masterModelPath)) {
+                try {
+                    const raw = JSON.parse(fs.readFileSync(masterModelPath, 'utf-8'));
+                    if (raw.parent) masterParent = raw.parent;
+                    if (raw.textures) masterTextures = raw.textures;
+                    if (Array.isArray(raw.overrides)) {
+                        existingOverrides.push(...raw.overrides);
+                    }
+                } catch {}
+            }
+
+            // Deduplicate overrides by CustomModelData (new items take priority on collision)
             const cmdMap = new Map();
+            for (const ov of existingOverrides) {
+                if (ov && ov.predicate && typeof ov.predicate.custom_model_data !== 'undefined') {
+                    cmdMap.set(ov.predicate.custom_model_data, ov);
+                }
+            }
             for (const ov of overrides) {
                 cmdMap.set(ov.predicate.custom_model_data, ov);
             }
+
             const sortedOverrides = Array.from(cmdMap.values()).sort(
                 (a, b) => a.predicate.custom_model_data - b.predicate.custom_model_data
             );
 
             const masterModelJson = {
-                parent: isHandheldItem(baseItem) ? 'item/handheld' : 'item/generated',
-                textures: {
-                    layer0: `minecraft:item/${baseItem}`
-                },
+                parent: masterParent,
+                textures: masterTextures,
                 overrides: sortedOverrides
             };
             fs.writeFileSync(masterModelPath, JSON.stringify(masterModelJson, null, 2), 'utf-8');
         }
 
-        // 4. Process Custom Fonts / Emoji Glyphs
+        // 4. Process Custom Fonts / Emoji Glyphs (merging with existing font/default.json)
         const fontProviders = [];
         for (const f of (fonts || [])) {
             if (!f.symbol || !f.imagePath) continue;
@@ -304,8 +342,73 @@ ipcMain.handle('pack:generate', async (_, packData) => {
         }
 
         if (fontProviders.length > 0) {
-            const fontJson = { providers: fontProviders };
-            fs.writeFileSync(path.join(fontDir, 'default.json'), JSON.stringify(fontJson, null, 2), 'utf-8');
+            const defaultFontPath = path.join(fontDir, 'default.json');
+            let combinedProviders = [];
+            if (fs.existsSync(defaultFontPath)) {
+                try {
+                    const existing = JSON.parse(fs.readFileSync(defaultFontPath, 'utf-8'));
+                    if (Array.isArray(existing.providers)) {
+                        combinedProviders.push(...existing.providers);
+                    }
+                } catch {}
+            }
+
+            for (const fp of fontProviders) {
+                const charKey = (fp.chars || []).join('');
+                const idx = combinedProviders.findIndex(p => (p.chars || []).join('') === charKey);
+                if (idx >= 0) {
+                    combinedProviders[idx] = fp;
+                } else {
+                    combinedProviders.push(fp);
+                }
+            }
+
+            const fontJson = { providers: combinedProviders };
+            fs.writeFileSync(defaultFontPath, JSON.stringify(fontJson, null, 2), 'utf-8');
+        }
+
+        // 5. Process Custom Sounds & Music (sounds.json)
+        if (Array.isArray(sounds) && sounds.length > 0) {
+            const soundsAudioDir = path.join(assetsDir, 'sounds');
+            const soundsJsonPath = path.join(assetsDir, 'sounds.json');
+            fs.mkdirSync(soundsAudioDir, { recursive: true });
+
+            let existingSounds = {};
+            if (fs.existsSync(soundsJsonPath)) {
+                try {
+                    existingSounds = JSON.parse(fs.readFileSync(soundsJsonPath, 'utf-8'));
+                } catch {}
+            }
+
+            for (const s of sounds) {
+                if (!s.eventId || !s.oggPath) continue;
+
+                const eventId = s.eventId.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '_');
+                const safeFileName = path.basename(s.oggPath, path.extname(s.oggPath))
+                    .toLowerCase().replace(/[^a-z0-9_.-]/g, '_');
+
+                const subDir = s.category === 'music' || s.category === 'record' ? 'music' : 'custom';
+                const destSubDir = path.join(soundsAudioDir, subDir);
+                fs.mkdirSync(destSubDir, { recursive: true });
+
+                const destOgg = path.join(destSubDir, `${safeFileName}.ogg`);
+                if (fs.existsSync(s.oggPath)) {
+                    fs.copyFileSync(s.oggPath, destOgg);
+                }
+
+                const soundEntry = {
+                    name: `${subDir}/${safeFileName}`,
+                    stream: !!s.stream
+                };
+
+                existingSounds[eventId] = {
+                    category: s.category || 'player',
+                    subtitle: s.subtitle || undefined,
+                    sounds: [soundEntry]
+                };
+            }
+
+            fs.writeFileSync(soundsJsonPath, JSON.stringify(existingSounds, null, 2), 'utf-8');
         }
 
         return { success: true, targetDir };
@@ -322,6 +425,81 @@ ipcMain.handle('pack:create-zip', async (_, { sourceDir, outputZip }) => {
 // Upload pack to public host (Catbox / 0x0 / file.io)
 ipcMain.handle('pack:upload-cloud', async (_, { filePath, provider }) => {
     return await nativeBridge.uploadToPublicHost(filePath, provider);
+});
+
+// Resolve local Minecraft resourcepacks folder across Windows, macOS, and Linux
+function getMinecraftResourcePacksDir() {
+    if (process.platform === 'win32') {
+        const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming');
+        return path.join(appData, '.minecraft', 'resourcepacks');
+    } else if (process.platform === 'darwin') {
+        const home = process.env.HOME || '/Users';
+        return path.join(home, 'Library', 'Application Support', 'minecraft', 'resourcepacks');
+    } else {
+        const home = process.env.HOME || '/root';
+        return path.join(home, '.minecraft', 'resourcepacks');
+    }
+}
+
+// 1-Click Export directly into .minecraft/resourcepacks
+ipcMain.handle('pack:export-to-minecraft', async (_, { sourceDir, packName }) => {
+    try {
+        if (!sourceDir || !fs.existsSync(sourceDir)) {
+            return { success: false, error: 'Директория ресурс-пака не найдена' };
+        }
+        const rpDir = getMinecraftResourcePacksDir();
+        if (!fs.existsSync(rpDir)) {
+            fs.mkdirSync(rpDir, { recursive: true });
+        }
+        const safeName = (packName || path.basename(sourceDir) || 'ServerResourcePack')
+            .replace(/[/\\:*?"<>|]/g, '_');
+        const targetZip = path.join(rpDir, `${safeName}.zip`);
+        const packRes = await nativeBridge.packZip(sourceDir, targetZip);
+        return {
+            success: true,
+            targetPath: targetZip,
+            size_bytes: packRes.size_bytes,
+            sha1: packRes.sha1
+        };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+// Get Minecraft folder status
+ipcMain.handle('pack:get-minecraft-dir', async () => {
+    const dir = getMinecraftResourcePacksDir();
+    return {
+        path: dir,
+        exists: fs.existsSync(dir)
+    };
+});
+
+// Save image from base64 (Pure Canvas Parity Fallback)
+ipcMain.handle('fs:save-image-buffer', async (_, { filePath, base64Data }) => {
+    try {
+        const buffer = Buffer.from(base64Data, 'base64');
+        fs.writeFileSync(filePath, buffer);
+        return { success: true };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+// Rename file for Minecraft path linter auto-fix
+ipcMain.handle('fs:rename-file', async (_, { oldPath, newPath }) => {
+    try {
+        if (!fs.existsSync(oldPath)) {
+            return { success: false, error: 'Исходный файл не существует' };
+        }
+        if (fs.existsSync(newPath) && oldPath.toLowerCase() !== newPath.toLowerCase()) {
+            return { success: false, error: 'Файл с таким именем уже существует' };
+        }
+        fs.renameSync(oldPath, newPath);
+        return { success: true, newPath };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
 });
 
 // Open external URL (Telegram links, etc.)
@@ -341,16 +519,21 @@ ipcMain.handle('fs:is-directory', async (_, p) => {
 
 // System memory stats across all processes
 ipcMain.handle('app:get-stats', async () => {
-    let totalWorkingSetKB = 0;
+    let totalPrivateKB = 0;
     try {
         const metrics = app.getAppMetrics();
         for (const m of metrics) {
-            totalWorkingSetKB += (m.memory && m.memory.workingSetSize) ? m.memory.workingSetSize : 0;
+            if (m.memory && typeof m.memory.privateBytes === 'number') {
+                totalPrivateKB += m.memory.privateBytes;
+            }
         }
     } catch {}
 
     const mem = process.memoryUsage();
-    const finalMB = totalWorkingSetKB > 0 ? Math.round(totalWorkingSetKB / 1024) : Math.round(mem.rss / 1024 / 1024);
+    // Sum of private unshared bytes across all processes represents actual physical RAM footprint
+    const finalMB = totalPrivateKB > 0
+        ? Math.round(totalPrivateKB / 1024)
+        : Math.round(mem.rss / 1024 / 1024);
 
     return {
         heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),

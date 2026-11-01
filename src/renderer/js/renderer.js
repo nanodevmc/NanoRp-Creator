@@ -4,6 +4,7 @@ let currentZipPath = '';
 let parityImages = []; // { path, width, height, valid, is_even_w, is_even_h, suggested_w, suggested_h }
 let fontMappings = []; // { symbol, imagePath, height, ascent }
 let itemMappings = []; // { baseItem, cmd, imagePath, customName }
+let soundMappings = []; // { eventId, oggPath, category, stream, subtitle }
 
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
@@ -42,7 +43,7 @@ async function refreshStats() {
         }
     } catch {}
 }
-setInterval(refreshStats, 3000);
+setInterval(refreshStats, 5000);
 refreshStats();
 
 // --- PAGE 1: PROJECT & CLOUD ---
@@ -147,7 +148,8 @@ document.getElementById('btn-generate-pack').addEventListener('click', async () 
         packFormat: document.getElementById('sel-pack-format').value,
         description: document.getElementById('inp-pack-desc').value,
         items: itemMappings,
-        fonts: fontMappings
+        fonts: fontMappings,
+        sounds: soundMappings
     };
 
     const btn = document.getElementById('btn-generate-pack');
@@ -197,6 +199,39 @@ document.getElementById('btn-create-zip').addEventListener('click', async () => 
         if (span) span.textContent = 'Упаковать .ZIP';
     }
 });
+
+// Export directly to .minecraft/resourcepacks in 1 click
+const exportMcBtn = document.getElementById('btn-export-minecraft');
+if (exportMcBtn) {
+    exportMcBtn.addEventListener('click', async () => {
+        if (!currentPackDir) {
+            alert('Сначала выберите или укажите папку ресурс-пака!');
+            return;
+        }
+
+        const packName = document.getElementById('inp-pack-name').value.trim() || 'ServerResourcePack';
+        const span = exportMcBtn.querySelector('span');
+        const origText = span ? span.textContent : '';
+        exportMcBtn.disabled = true;
+        if (span) span.textContent = 'Экспорт в .minecraft...';
+
+        try {
+            const res = await window.api.exportToMinecraft(currentPackDir, packName);
+            if (res.success) {
+                const statusBox = document.getElementById('box-minecraft-status');
+                if (statusBox) {
+                    statusBox.style.display = 'block';
+                    statusBox.innerHTML = `✓ Ресурс-пак <b>${packName}.zip</b> скопирован в папку игры!<br>Нажмите <b style="color: #fff;">F3 + T</b> в Minecraft для быстрой перезагрузки.`;
+                }
+            } else {
+                alert('Ошибка экспорта в .minecraft: ' + res.error);
+            }
+        } finally {
+            exportMcBtn.disabled = false;
+            if (span) span.textContent = origText;
+        }
+    });
+}
 
 // Upload to Cloud
 document.getElementById('btn-upload-cloud').addEventListener('click', async () => {
@@ -303,9 +338,73 @@ if (clearParityBtn) {
     });
 }
 
+// Minecraft standard resource naming check: strictly lowercase, digits, _, -, .
+function isMinecraftPathValid(filePath) {
+    const fileName = filePath.split(/[\\/]/).pop();
+    return /^[a-z0-9_.-]+$/.test(fileName);
+}
+
+function sanitizeMinecraftFileName(fileName) {
+    const dotIdx = fileName.lastIndexOf('.');
+    const ext = dotIdx > 0 ? fileName.substring(dotIdx).toLowerCase() : '';
+    const base = dotIdx > 0 ? fileName.substring(0, dotIdx) : fileName;
+
+    const ruToEn = {
+        'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh','з':'z','и':'i','й':'y',
+        'к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f',
+        'х':'h','ц':'ts','ч':'ch','ш':'sh','щ':'sch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya'
+    };
+    let clean = base.toLowerCase();
+    clean = clean.split('').map(c => ruToEn[c] || c).join('');
+    clean = clean.replace(/[^a-z0-9_.-]/g, '_');
+    return clean + ext;
+}
+
+// Pure Canvas Fallback for 100% reliable edge-clamping on any system without Rust
+async function canvasEdgeClampFix(inPath, outPath, oldW, oldH, targetW, targetH) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = async () => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = targetW;
+                canvas.height = targetH;
+                const ctx = canvas.getContext('2d');
+                ctx.imageSmoothingEnabled = false;
+
+                // Draw original
+                ctx.drawImage(img, 0, 0);
+
+                // Replicate rightmost pixel column if width expanded
+                if (targetW > oldW) {
+                    ctx.drawImage(canvas, oldW - 1, 0, 1, oldH, oldW, 0, targetW - oldW, oldH);
+                }
+                // Replicate bottommost pixel row if height expanded
+                if (targetH > oldH) {
+                    ctx.drawImage(canvas, 0, oldH - 1, targetW, 1, 0, oldH, targetW, targetH - oldH);
+                }
+
+                const dataUrl = canvas.toDataURL('image/png');
+                const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+                const saveRes = await window.api.saveImageBuffer(outPath, base64);
+                if (saveRes && saveRes.success) {
+                    resolve(true);
+                } else {
+                    reject(new Error(saveRes ? saveRes.error : 'Save failed'));
+                }
+            } catch (err) {
+                reject(err);
+            }
+        };
+        img.onerror = () => reject(new Error('Не удалось декодировать изображение'));
+        img.src = `file://${inPath.replace(/\\/g, '/')}?t=${Date.now()}`;
+    });
+}
+
 function renderParityTable() {
     const tbody = document.getElementById('tbl-parity-body');
     const fixAllBtn = document.getElementById('btn-fix-all-images');
+    const lintBtn = document.getElementById('btn-fix-linter-names');
     const clearBtn = document.getElementById('btn-clear-parity');
     const countLbl = document.getElementById('lbl-parity-count');
 
@@ -313,12 +412,15 @@ function renderParityTable() {
 
     if (countLbl) {
         const oddCount = parityImages.filter(p => !p.valid).length;
-        countLbl.textContent = `${parityImages.length} файлов (${oddCount} нечётных)`;
+        const invalidNamesCount = parityImages.filter(p => !isMinecraftPathValid(p.path)).length;
+        const namesNote = invalidNamesCount > 0 ? `, ${invalidNamesCount} с некорректным именем` : '';
+        countLbl.textContent = `${parityImages.length} файлов (${oddCount} нечётных${namesNote})`;
     }
 
     if (parityImages.length === 0) {
         tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; padding: 32px; color: var(--ink-tertiary);">Файлы ещё не загружены. Нажмите «Выбрать файлы» или укажите директорию.</td></tr>`;
         if (fixAllBtn) fixAllBtn.style.display = 'none';
+        if (lintBtn) lintBtn.style.display = 'none';
         return;
     }
 
@@ -329,18 +431,28 @@ function renderParityTable() {
     if (filtered.length === 0) {
         tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; padding: 32px; color: var(--ink-tertiary);">По запросу «${paritySearchQuery}» ничего не найдено</td></tr>`;
         if (fixAllBtn) fixAllBtn.style.display = 'none';
+        if (lintBtn) lintBtn.style.display = 'none';
         return;
     }
 
     const hasOdd = parityImages.some(img => !img.valid);
     if (fixAllBtn) fixAllBtn.style.display = hasOdd ? 'inline-flex' : 'none';
 
+    const hasInvalidNames = parityImages.some(img => !isMinecraftPathValid(img.path));
+    if (lintBtn) lintBtn.style.display = hasInvalidNames ? 'inline-flex' : 'none';
+
     tbody.innerHTML = filtered.map((img) => {
         const originalIndex = parityImages.indexOf(img);
         const fileName = img.path.split(/[\\/]/).pop();
+        const pathValid = isMinecraftPathValid(img.path);
+
         const statusBadge = img.valid
             ? `<span class="parity-badge parity-badge--even"><span class="parity-badge__dot"></span>Чётный</span>`
             : `<span class="parity-badge parity-badge--odd"><span class="parity-badge__dot"></span>Нечётный</span>`;
+
+        const nameBadge = !pathValid
+            ? `<span class="parity-badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 10px; margin-left: 6px;"><span class="parity-badge__dot" style="background: #f59e0b;"></span>Не по стандарту</span>`
+            : '';
 
         const actionBtn = img.valid
             ? `<span style="color: var(--ink-muted); font-size: 11px; font-family: var(--font-mono);">OK</span>`
@@ -349,7 +461,9 @@ function renderParityTable() {
         return `
             <tr>
                 <td>
-                    <div style="font-weight: 600; color: var(--ink-primary);">${fileName}</div>
+                    <div style="font-weight: 600; color: var(--ink-primary); display: flex; align-items: center;">
+                        ${fileName} ${nameBadge}
+                    </div>
                     <div style="font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-tertiary); overflow: hidden; text-overflow: ellipsis; max-width: 340px;">${img.path}</div>
                 </td>
                 <td><span style="font-family: var(--font-mono); font-variant-numeric: tabular-nums;">${img.width} × ${img.height}</span></td>
@@ -366,12 +480,51 @@ window.fixSingleImage = async function(idx) {
 
     const outPath = item.path; // overwrite or fix
     const res = await window.api.fixImage(item.path, outPath);
-    if (res.success) {
-        const updated = await window.api.inspectImage(outPath);
+    let updated = await window.api.inspectImage(outPath);
+
+    // If native engine did not expand the dimensions (JS Fallback active), execute pure canvas edge-clamp!
+    if (!updated || !updated.valid) {
+        try {
+            await canvasEdgeClampFix(item.path, outPath, item.width, item.height, item.suggested_w, item.suggested_h);
+            updated = await window.api.inspectImage(outPath);
+        } catch (cErr) {
+            console.error('Canvas Fallback error:', cErr);
+        }
+    }
+
+    if (updated) {
         parityImages[idx] = updated;
         renderParityTable();
     }
 };
+
+// Auto-rename files violating Minecraft naming standards
+const lintBtn = document.getElementById('btn-fix-linter-names');
+if (lintBtn) {
+    lintBtn.addEventListener('click', async () => {
+        let fixedCount = 0;
+        for (let i = 0; i < parityImages.length; i++) {
+            const p = parityImages[i].path;
+            if (!isMinecraftPathValid(p)) {
+                const parts = p.split(/[\\/]/);
+                const oldFileName = parts.pop();
+                const dir = parts.join('/');
+                const newFileName = sanitizeMinecraftFileName(oldFileName);
+                const newFullPath = dir + '/' + newFileName;
+
+                const res = await window.api.renameFile(p, newFullPath);
+                if (res.success) {
+                    parityImages[i].path = res.newPath || newFullPath;
+                    fixedCount++;
+                }
+            }
+        }
+        if (fixedCount > 0) {
+            alert(`Успешно переименовано ${fixedCount} файлов по стандарту Minecraft (только a-z, 0-9, _, -)!`);
+            renderParityTable();
+        }
+    });
+}
 
 document.getElementById('btn-fix-all-images').addEventListener('click', async () => {
     const btn = document.getElementById('btn-fix-all-images');
@@ -533,7 +686,8 @@ function renderItemList() {
                     <div class="mapping-meta">CustomModelData: <span style="color: var(--accent); font-weight: 700;">${it.cmd}</span> · ${fileName}</div>
                 </div>
                 <div style="display: flex; gap: 6px;">
-                    <button class="btn btn-secondary btn-sm" onclick="copyGiveCommand(this, ${i})">Копировать /give</button>
+                    <button class="btn btn-secondary btn-sm" onclick="copyGiveCommand(this, ${i})" title="Копировать по выбранному синтаксису">/give</button>
+                    <button class="btn btn-secondary btn-sm" onclick="copyGiveCommand(this, ${i}, 'components')" title="Копировать в формате компонентов (1.20.5+ / 1.21)">1.20.5+</button>
                     <button class="btn btn-danger-subtle btn-sm" onclick="removeItem(${i})">Удалить</button>
                 </div>
             </div>
@@ -541,16 +695,128 @@ function renderItemList() {
     }).join('');
 }
 
-window.copyGiveCommand = function(btn, index) {
+window.copyGiveCommand = function(btn, index, forceSyntax) {
     const item = itemMappings[index];
     if (!item) return;
-    const cmd = `/give @p minecraft:${item.baseItem}{CustomModelData:${item.cmd}} 1`;
+
+    const selEl = document.getElementById('sel-give-syntax');
+    const syntax = forceSyntax || (selEl ? selEl.value : 'auto');
+
+    let useComponents = false;
+    if (syntax === 'components') {
+        useComponents = true;
+    } else if (syntax === 'nbt') {
+        useComponents = false;
+    } else {
+        // Auto: 1.20.5+ starts at pack_format 34
+        const packFormatEl = document.getElementById('sel-pack-format');
+        const pFormat = packFormatEl ? parseInt(packFormatEl.value, 10) : 34;
+        useComponents = (pFormat >= 34);
+    }
+
+    const cmd = useComponents
+        ? `/give @p minecraft:${item.baseItem}[custom_model_data=${item.cmd}] 1`
+        : `/give @p minecraft:${item.baseItem}{CustomModelData:${item.cmd}} 1`;
+
     copyWithFeedback(btn, cmd);
 };
 
 window.removeItem = function(index) {
     itemMappings.splice(index, 1);
     renderItemList();
+};
+
+// --- PAGE: SOUNDS & AUDIO (SOUNDS.JSON) ---
+
+document.getElementById('btn-sound-browse').addEventListener('click', async () => {
+    const files = await window.api.openFiles([{ name: 'OGG Audio (*.ogg)', extensions: ['ogg'] }]);
+    if (files && files.length > 0) {
+        document.getElementById('inp-sound-path').value = files[0];
+        const fileName = files[0].split(/[\\/]/).pop().replace(/\.ogg$/i, '');
+        const currentEvent = document.getElementById('inp-sound-event').value;
+        if (!currentEvent || currentEvent === 'custom.magic_shot') {
+            document.getElementById('inp-sound-event').value = 'custom.' + fileName.toLowerCase().replace(/[^a-z0-9_.-]/g, '_');
+        }
+    }
+});
+
+const clearSoundsBtn = document.getElementById('btn-clear-sounds');
+if (clearSoundsBtn) {
+    clearSoundsBtn.addEventListener('click', () => {
+        soundMappings = [];
+        renderSoundList();
+    });
+}
+
+document.getElementById('btn-confirm-add-sound').addEventListener('click', () => {
+    const eventIdInp = document.getElementById('inp-sound-event');
+    const pathInp = document.getElementById('inp-sound-path');
+    const catSelect = document.getElementById('sel-sound-category');
+    const streamChk = document.getElementById('chk-sound-stream');
+    const subInp = document.getElementById('inp-sound-subtitle');
+
+    const eventId = (eventIdInp.value || '').trim().toLowerCase();
+    const oggPath = (pathInp.value || '').trim();
+    const category = catSelect.value;
+    const stream = !!streamChk.checked;
+    const subtitle = (subInp.value || '').trim();
+
+    if (!eventId || !oggPath) {
+        alert('Заполните ID звукового события и выберите .ogg файл!');
+        return;
+    }
+
+    soundMappings.push({ eventId, oggPath, category, stream, subtitle });
+    renderSoundList();
+    pathInp.value = '';
+});
+
+function renderSoundList() {
+    const container = document.getElementById('list-sound-mappings');
+    const clearBtn = document.getElementById('btn-clear-sounds');
+    if (clearBtn) clearBtn.style.display = soundMappings.length > 0 ? 'inline-flex' : 'none';
+
+    if (soundMappings.length === 0) {
+        container.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--ink-tertiary); font-size: 12px;">Звуковые события не добавлены</div>`;
+        return;
+    }
+
+    container.innerHTML = soundMappings.map((s, i) => {
+        const fileName = s.oggPath.split(/[\\/]/).pop();
+        const streamBadge = s.stream
+            ? `<span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(59, 130, 246, 0.2); color: #60a5fa;">Stream: true</span>`
+            : '';
+        const subInfo = s.subtitle ? ` · Субтитр: <i>${s.subtitle}</i>` : '';
+
+        return `
+            <div class="mapping-card">
+                <div class="mapping-thumb-3d" style="background: rgba(14, 165, 233, 0.1); border-color: rgba(14, 165, 233, 0.25);">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#38bdf8" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                    <span>OGG</span>
+                </div>
+                <div class="mapping-details">
+                    <div class="mapping-title"><code>${s.eventId}</code> ${streamBadge}</div>
+                    <div class="mapping-meta">Категория: <b>${s.category}</b> · ${fileName}${subInfo}</div>
+                </div>
+                <div style="display: flex; gap: 6px;">
+                    <button class="btn btn-secondary btn-sm" onclick="copyPlaysoundCommand(this, ${i})">Копировать /playsound</button>
+                    <button class="btn btn-danger-subtle btn-sm" onclick="removeSound(${i})">Удалить</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+window.copyPlaysoundCommand = function(btn, index) {
+    const s = soundMappings[index];
+    if (!s) return;
+    const cmd = `/playsound ${s.eventId} ${s.category || 'player'} @a ~ ~ ~ 1 1`;
+    copyWithFeedback(btn, cmd);
+};
+
+window.removeSound = function(index) {
+    soundMappings.splice(index, 1);
+    renderSoundList();
 };
 
 // --- PAGE 5: CONTACTS & EXTERNAL LINKS ---
@@ -635,6 +901,14 @@ window.addEventListener('drop', async (e) => {
             if (itemPathInp) itemPathInp.value = filePath;
             const itemsTab = document.querySelector('[data-page="page-items"]');
             if (itemsTab && !itemsTab.classList.contains('active')) itemsTab.click();
+        } else if (ext === 'ogg') {
+            const soundPathInp = document.getElementById('inp-sound-path');
+            if (soundPathInp) soundPathInp.value = filePath;
+            const fileName = filePath.split(/[\\/]/).pop().replace(/\.ogg$/i, '');
+            const eventInp = document.getElementById('inp-sound-event');
+            if (eventInp) eventInp.value = 'custom.' + fileName.toLowerCase().replace(/[^a-z0-9_.-]/g, '_');
+            const soundsTab = document.querySelector('[data-page="page-sounds"]');
+            if (soundsTab && !soundsTab.classList.contains('active')) soundsTab.click();
         } else if (ext === 'zip') {
             currentZipPath = filePath;
             const projectTab = document.querySelector('[data-page="page-project"]');

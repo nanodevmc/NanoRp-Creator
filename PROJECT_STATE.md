@@ -25,10 +25,18 @@
 - [x] Zero-dependency чистый PKZIP 2.0 движок с валидными DOS-метками времени и CRC32.
 - [x] Интеграция прямого потокового RAW-хостинга `paste.c-net.org` (без капч и блокировок в СНГ).
 - [x] Иконка приложения и инсталлера NSIS в Windows.
-- [x] Полноценная поддержка Drag & Drop через `webUtils.getPathForFile` (поддержка папок и файлов).
-- [x] Экстремальная оптимизация ОЗУ (NetworkService in-process, V8 `--lite-mode`, лимит процессов).
-- [x] Официальный релиз v1.0.0 опубликован на GitHub с 8 артефактами (Windows exe, Linux AppImage, macOS DMG, zip).
-- [x] Свежий NanoRp-Creator.exe (68.1 МБ) обновлен на рабочем столе.
+- [x] Полноценная поддержка Drag & Drop через `webUtils.getPathForFile` (поддержка папок, файлов и .ogg).
+- [x] Деблоатинг Chromium (отключение расширений, телеметрии, фоновых служб, sandbox: true).
+- [x] Исправлен подсчёт ОЗУ в `app:get-stats`: расчёт по честному unshared `privateBytes` вместо завышенного `workingSetSize`.
+- [x] Очистка кэша сессии и тримминг памяти при минимизации окна и по таймеру.
+- [x] Снижена частота обновления счётчиков до 5 секунд для снижения фоновой нагрузки на CPU.
+- [x] Экспорт в 1 клик прямо в `.minecraft/resourcepacks` (Windows, macOS, Linux).
+- [x] Синтаксис `/give` для 1.20.5+ / 1.21 (`[custom_model_data=X]`) и 1.14-1.20.4 (`{CustomModelData:X}`).
+- [x] Умный мердж существующих моделей и `font/default.json` без затирания старых записей.
+- [x] Pure Canvas Parity Fallback: надёжное расширение чётности (+1px edge clamp) даже без Rust.
+- [x] Minecraft Path Linter: проверка и авто-переименование файлов по стандарту Mojang (`a-z0-9_.-`).
+- [x] Менеджер звуков и музыки: генерация `sounds.json`, стриминг аудио и генератор `/playsound`.
+- [x] Фильтрация мусорных файлов в ZIP (`.git`, `Thumbs.db`, `.DS_Store`, `.bak`).
 
 ## 4. Правила окружения
 - Windows 10, 4 ГБ ОЗУ, слабый процессор: сборка только через cmd, никакого PowerShell.

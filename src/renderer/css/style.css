@@ -467,6 +467,16 @@ body {
   background: rgba(248, 113, 113, 0.2);
 }
 
+.btn-warning-subtle {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #fbbf24;
+}
+
+.btn-warning-subtle:hover {
+  background: rgba(245, 158, 11, 0.22);
+}
+
 .btn-sm {
   padding: 4px 8px;
   font-size: 11px;

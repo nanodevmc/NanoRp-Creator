@@ -40,6 +40,10 @@
           <svg viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
           <span>Кастомные модели</span>
         </div>
+        <div class="nav-item" data-page="page-sounds">
+          <svg viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          <span>Звуки & Аудио</span>
+        </div>
       </div>
 
       <div class="nav-section">
@@ -164,6 +168,14 @@
               </button>
             </div>
 
+            <button id="btn-export-minecraft" class="btn btn-accent-subtle" style="width: 100%; margin-top: 8px; justify-content: center;">
+              <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              <span>⚡ Экспорт в .minecraft/resourcepacks (В 1 клик)</span>
+            </button>
+            <div id="box-minecraft-status" style="display: none; margin-top: 6px; padding: 8px 10px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); font-size: 11px; color: #4ade80;">
+              ✓ Экспортировано в папку игры! Нажмите <b>F3 + T</b> в Minecraft для применения.
+            </div>
+
             <div id="box-cloud-result" class="output-box" style="display: none;">
               <div class="output-row">
                 <span class="control-label">URL</span>
@@ -205,6 +217,10 @@
             <button id="btn-fix-all-images" class="btn btn-accent-subtle" style="display: none;">
               <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
               <span>Расширить все нечётные (+1px)</span>
+            </button>
+            <button id="btn-fix-linter-names" class="btn btn-warning-subtle" style="display: none;">
+              <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span>Исправить имена путей (Minecraft-стандарт)</span>
             </button>
             <button id="btn-clear-parity" class="btn btn-secondary btn-sm" style="display: none;">
               <span>Очистить</span>
@@ -289,6 +305,14 @@
             <p>Связывание базового предмета Minecraft с кастомной моделью без ручной правки overrides JSON</p>
           </div>
           <div class="header-actions">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 11px; color: var(--ink-secondary); font-family: var(--font-mono); white-space: nowrap;">Синтаксис /give:</span>
+              <select id="sel-give-syntax" class="select-field" style="width: auto; height: 32px; font-size: 11px; padding: 2px 24px 2px 8px;">
+                <option value="auto" selected>Авто (по версии пака)</option>
+                <option value="components">1.20.5+ [custom_model_data=X]</option>
+                <option value="nbt">1.14 - 1.20.4 {CustomModelData:X}</option>
+              </select>
+            </div>
             <button id="btn-clear-items" class="btn btn-secondary btn-sm" style="display: none;">
               <span>Очистить все</span>
             </button>
@@ -318,6 +342,67 @@
 
         <div class="mapping-grid" id="list-item-mappings">
           <!-- Dynamically populated custom item rows -->
+        </div>
+      </section>
+
+      <!-- PAGE: SOUNDS & AUDIO -->
+      <section id="page-sounds" class="page">
+        <header class="view-header">
+          <div class="view-title-group">
+            <h1>Звуковые события & Музыка (sounds.json)</h1>
+            <p>Привязка .OGG аудио к звуковым событиям Minecraft с категориями и стримингом для фоновой музыки</p>
+          </div>
+          <div class="header-actions">
+            <button id="btn-clear-sounds" class="btn btn-secondary btn-sm" style="display: none;">
+              <span>Очистить все</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="panel">
+          <div style="display: grid; grid-template-columns: 1.2fr 1.8fr 110px auto; gap: 10px; align-items: flex-end;">
+            <div class="control-group">
+              <label class="control-label" for="inp-sound-event">ID звукового события</label>
+              <input type="text" id="inp-sound-event" class="input-field" placeholder="custom.magic_shot, record.chill" value="custom.magic_shot">
+            </div>
+            <div class="control-group">
+              <label class="control-label" for="inp-sound-path">Файл звука (.OGG)</label>
+              <div style="display: flex; gap: 6px;">
+                <input type="text" id="inp-sound-path" class="input-field" placeholder="Путь к .ogg файлу" readonly style="flex: 1;">
+                <button id="btn-sound-browse" class="btn btn-secondary btn-sm">Обзор</button>
+              </div>
+            </div>
+            <div class="control-group">
+              <label class="control-label" for="sel-sound-category">Категория</label>
+              <select id="sel-sound-category" class="select-field">
+                <option value="player" selected>player</option>
+                <option value="master">master</option>
+                <option value="music">music</option>
+                <option value="record">record</option>
+                <option value="ambient">ambient</option>
+                <option value="hostile">hostile</option>
+                <option value="neutral">neutral</option>
+                <option value="block">block</option>
+                <option value="voice">voice</option>
+              </select>
+            </div>
+            <button id="btn-confirm-add-sound" class="btn btn-primary" style="height: 35px;">Добавить</button>
+          </div>
+
+          <div style="display: flex; gap: 16px; margin-top: 12px; align-items: center;">
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-secondary); cursor: pointer;">
+              <input type="checkbox" id="chk-sound-stream">
+              <span>Стриминг с диска (<code>stream: true</code> — для музыки, дисков и треков >500 КБ)</span>
+            </label>
+            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+              <span class="control-label" style="margin: 0; white-space: nowrap;">Субтитр:</span>
+              <input type="text" id="inp-sound-subtitle" class="input-field" placeholder="subtitles.custom.magic_shot (опционально)" style="height: 28px; font-size: 11px;">
+            </div>
+          </div>
+        </div>
+
+        <div class="mapping-grid" id="list-sound-mappings">
+          <!-- Dynamically populated sound rows -->
         </div>
       </section>
 

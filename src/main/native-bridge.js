@@ -194,6 +194,7 @@ async function fallbackZip(sourceDir, outputZip) {
             function walk(current, base = '') {
                 const items = fs.readdirSync(current, { withFileTypes: true });
                 for (const item of items) {
+                    if (item.name === '.git' || item.name === 'Thumbs.db' || item.name === '.DS_Store' || item.name === 'desktop.ini' || item.name.endsWith('.bak')) continue;
                     const full = path.join(current, item.name);
                     const rel = base ? `${base}/${item.name}` : item.name;
                     if (item.isDirectory()) {
