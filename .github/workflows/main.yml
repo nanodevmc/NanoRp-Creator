@@ -8,15 +8,261 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
-concurrency:
-  group: pipeline-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: write
 
 jobs:
-  # SUBJOB 1: macOS Automated UI Preview & Playwright Screenshots
+  # ========================================================
+  # JOB 1: WINDOWS INDEPENDENT BUILD & DIRECT RELEASE
+  # ========================================================
+  build-windows:
+    name: Windows x64 (NSIS & Portable)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            native/rust-engine/target/
+          key: ${{ runner.os }}-cargo-main-${{ hashFiles('native/rust-engine/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-main-
+
+      - name: Setup MSVC Developer Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.x'
+
+      - name: Compile Native Engines (Windows)
+        shell: cmd
+        run: |
+          cargo build --release --manifest-path native\rust-engine\Cargo.toml
+          if exist native\cpp-engine\build rmdir /s /q native\cpp-engine\build
+          cmake -B native\cpp-engine\build -S native\cpp-engine -DCMAKE_BUILD_TYPE=Release
+          cmake --build native\cpp-engine\build --config Release
+          if not exist bin mkdir bin
+          copy native\rust-engine\target\release\nano-rp-rust-engine.exe bin\ >nul 2>&1 || ver >nul
+          copy native\cpp-engine\build\Release\nano-rp-cpp-engine.exe bin\ >nul 2>&1 || copy native\cpp-engine\build\nano-rp-cpp-engine.exe bin\ >nul 2>&1 || ver >nul
+
+      - name: Install Node Modules
+        run: npm ci
+
+      - name: Build and 35-Stage Debloat (Windows)
+        shell: cmd
+        run: npm run dist:win -- --publish never
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-Windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+          retention-days: 14
+
+      - name: Publish Windows to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
+          name: NanoRp-Creator ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
+          make_latest: true
+          files: |
+            dist/*.exe
+            dist/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ========================================================
+  # JOB 2: LINUX INDEPENDENT BUILD & DIRECT RELEASE
+  # ========================================================
+  build-linux:
+    name: Linux x64 (AppImage & Tar.gz)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            native/rust-engine/target/
+          key: ${{ runner.os }}-cargo-main-${{ hashFiles('native/rust-engine/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-main-
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.x'
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools build-essential libfuse2
+
+      - name: Compile Native Engines (Linux)
+        shell: bash
+        run: |
+          cargo update --manifest-path native/rust-engine/Cargo.toml || true
+          cargo build --release --manifest-path native/rust-engine/Cargo.toml || true
+          rm -rf native/cpp-engine/build
+          cmake -B native/cpp-engine/build -S native/cpp-engine -DCMAKE_BUILD_TYPE=Release || true
+          cmake --build native/cpp-engine/build --config Release || true
+          mkdir -p bin
+          cp native/rust-engine/target/release/nano-rp-rust-engine bin/ || true
+          cp native/cpp-engine/build/nano-rp-cpp-engine bin/ || true
+          chmod +x bin/* || true
+
+      - name: Install Node Modules
+        run: npm ci
+
+      - name: Build and 35-Stage Debloat (Linux)
+        shell: bash
+        run: npm run dist:linux -- --publish never
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-Linux
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz
+            dist/*.zip
+          retention-days: 14
+
+      - name: Publish Linux to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
+          name: NanoRp-Creator ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
+          make_latest: true
+          files: |
+            dist/*.AppImage
+            dist/*.tar.gz
+            dist/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ========================================================
+  # JOB 3: MACOS INDEPENDENT BUILD & DIRECT RELEASE
+  # ========================================================
+  build-macos:
+    name: macOS (DMG & Zip)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            native/rust-engine/target/
+          key: ${{ runner.os }}-cargo-main-${{ hashFiles('native/rust-engine/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-main-
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.x'
+
+      - name: Compile Native Engines (macOS)
+        shell: bash
+        run: |
+          cargo update --manifest-path native/rust-engine/Cargo.toml || true
+          cargo build --release --manifest-path native/rust-engine/Cargo.toml || true
+          rm -rf native/cpp-engine/build
+          cmake -B native/cpp-engine/build -S native/cpp-engine -DCMAKE_BUILD_TYPE=Release || true
+          cmake --build native/cpp-engine/build --config Release || true
+          mkdir -p bin
+          cp native/rust-engine/target/release/nano-rp-rust-engine bin/ || true
+          cp native/cpp-engine/build/nano-rp-cpp-engine bin/ || true
+          chmod +x bin/* || true
+
+      - name: Install Node Modules
+        run: npm ci
+
+      - name: Build and 35-Stage Debloat (macOS)
+        shell: bash
+        run: npm run dist:mac -- --publish never
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-macOS
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          retention-days: 14
+
+      - name: Publish macOS to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
+          name: NanoRp-Creator ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
+          make_latest: true
+          files: |
+            dist/*.dmg
+            dist/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ========================================================
+  # JOB 4: INDEPENDENT MACOS UI PREVIEW (TESTS)
+  # ========================================================
   test-macos:
     name: macOS UI Preview (Playwright)
     runs-on: macos-latest
@@ -56,164 +302,3 @@ jobs:
           name: screenshots-macos-preview
           path: screenshots/
           retention-days: 14
-
-  # SUBJOB 2: Multi-Platform Build Matrix (Windows, Linux, macOS)
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            native/rust-engine/target/
-          key: ${{ runner.os }}-cargo-main-${{ hashFiles('native/rust-engine/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-main-
-
-      - name: Setup MSVC Developer Prompt (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Setup CMake
-        uses: jwlawson/actions-setup-cmake@v2
-        with:
-          cmake-version: '3.28.x'
-
-      - name: Install Linux Dependencies (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools build-essential libfuse2
-
-      # Windows Native Compilation using CMD (bypasses Git Bash /usr/bin/link conflict)
-      - name: Compile Native Engines (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          cargo build --release --manifest-path native\rust-engine\Cargo.toml
-          if exist native\cpp-engine\build rmdir /s /q native\cpp-engine\build
-          cmake -B native\cpp-engine\build -S native\cpp-engine -DCMAKE_BUILD_TYPE=Release
-          cmake --build native\cpp-engine\build --config Release
-          if not exist bin mkdir bin
-          copy native\rust-engine\target\release\nano-rp-rust-engine.exe bin\ >nul 2>&1 || ver >nul
-          copy native\cpp-engine\build\Release\nano-rp-cpp-engine.exe bin\ >nul 2>&1 || copy native\cpp-engine\build\nano-rp-cpp-engine.exe bin\ >nul 2>&1 || ver >nul
-
-      # Unix Native Compilation using Bash
-      - name: Compile Native Engines (Linux & macOS)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          cargo update --manifest-path native/rust-engine/Cargo.toml || true
-          cargo build --release --manifest-path native/rust-engine/Cargo.toml || true
-          rm -rf native/cpp-engine/build
-          cmake -B native/cpp-engine/build -S native/cpp-engine -DCMAKE_BUILD_TYPE=Release || true
-          cmake --build native/cpp-engine/build --config Release || true
-          mkdir -p bin
-          cp native/rust-engine/target/release/nano-rp-rust-engine bin/ || true
-          cp native/cpp-engine/build/nano-rp-cpp-engine bin/ || true
-          chmod +x bin/* || true
-
-      - name: Install Node Modules
-        run: npm ci
-
-      - name: Build and 35-Stage Debloat (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: npm run dist:win -- --publish never
-
-      - name: Build and 35-Stage Debloat (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: npm run dist:linux -- --publish never
-
-      - name: Build and 35-Stage Debloat (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: npm run dist:mac -- --publish never
-
-      - name: Upload Packaged Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-${{ runner.os }}
-          path: |
-            dist/*.exe
-            dist/*.AppImage
-            dist/*.dmg
-            dist/*.zip
-            dist/*.tar.gz
-          retention-days: 14
-
-  # SUBJOB 3: Automated Multi-Platform Release Publisher
-  release:
-    name: Publish GitHub Release
-    needs: [build, test-macos]
-    if: always() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          path: all-artifacts/
-
-      - name: Prepare Release Directory
-        run: |
-          mkdir -p release-files
-          if [ -d all-artifacts ]; then
-            find all-artifacts -type f \( -name "*.exe" -o -name "*.AppImage" -o -name "*.dmg" -o -name "*.zip" -o -name "*.tar.gz" -o -name "*.png" \) -exec cp {} release-files/ \;
-          fi
-          ls -la release-files/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
-          name: NanoRp-Creator ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.0' }}
-          make_latest: true
-          body: |
-            ## ⚡ NanoRp-Creator ${{ github.ref_name }} Release
-
-            Сверхлегкая кроссплатформенная студия создания ресурс-паков Minecraft с нативными C++17 и Rust движками.
-
-            ### 💎 Главные особенности релиза:
-            - **C++17 & Rust Engines**: потоковая валидация PNG, ZIP-сжатие и расчет SHA-1 без нагрузки на Node.js.
-            - **Интеллектуальный Parity Extender (+1px)**: автоматическое распознавание нечетных картинок (63x64, 31x32) и расширение на +1 пиксель (Edge Clamp) без искажения пиксель-арта.
-            - **Визуальный редактор глифов и шрифтов**: привязка текста и эмодзи к картинкам в чате (`font/default.json`) без ручного JSON.
-            - **Кастомные предметы (CustomModelData)**: наглядная привязка 3D-моделей и текстур к базовым предметам Minecraft.
-            - **Облачный линкер без API-ключей**: генерация постоянной ссылки и готовой строки для `server.properties` (`resource-pack=...` и `resource-pack-sha1=...`).
-            - **35-этапный Debloater**: удаление сотен мегабайт мусора Chromium, потребление ОЗУ снижено до ~40-50 МБ.
-            - **Превью-скриншоты macOS**: протестировано через Playwright и включено в дистрибутив.
-
-            ### 💬 Обратная связь и автор:
-            - **Автор**: NanoDev
-            - **Обратная связь**: [t.me/radoqi](https://t.me/radoqi)
-            - **Telegram канал**: [t.me/WineSquad](https://t.me/WineSquad)
-          files: release-files/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
